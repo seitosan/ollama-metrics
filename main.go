@@ -413,8 +413,16 @@ func main() {
 		}
 	})
 
-	// Start HTTP server
+	// Start HTTP server with timeouts
 	listenAddr := ":" + port
+	srv := &http.Server{
+		Addr:              listenAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      0,
+		IdleTimeout:       120 * time.Second,
+	}
 	log.Printf("Listening on %s", listenAddr)
-	log.Fatal(http.ListenAndServe(listenAddr, mux))
+	log.Fatal(srv.ListenAndServe())
 }
