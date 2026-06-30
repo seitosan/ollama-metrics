@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -70,9 +71,14 @@ var (
 	)
 )
 
-func init() {
-	// Register metrics with Prometheus default registry
-	prometheus.MustRegister(promptTokens, generatedTokens, requestDuration, timePerToken, loadedModelsGauge, loadedModelInfo, modelRAMUsage)
+func registerMetrics() error {
+	metrics := []prometheus.Collector{promptTokens, generatedTokens, requestDuration, timePerToken, loadedModelsGauge, loadedModelInfo, modelRAMUsage}
+	for _, m := range metrics {
+		if err := prometheus.Register(m); err != nil {
+			return fmt.Errorf("failed to register metric: %w", err)
+		}
+	}
+	return nil
 }
 
 // Structs to parse JSON responses from Ollama
@@ -151,6 +157,11 @@ func main() {
 	}
 
 	log.Printf("Starting Ollama proxy sidecar, forwarding to %s", upstreamAddr)
+
+	// Register Prometheus metrics
+	if err := registerMetrics(); err != nil {
+		log.Fatalf("Failed to register Prometheus metrics: %v", err)
+	}
 
 	// Optionally, initialize the loaded models gauge at startup
 	if resp, err := upstreamClient.Get(upstreamAddr + "/api/ps"); err == nil {
