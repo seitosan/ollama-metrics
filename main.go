@@ -154,14 +154,18 @@ func main() {
 
 	// Optionally, initialize the loaded models gauge at startup
 	if resp, err := upstreamClient.Get(upstreamAddr + "/api/ps"); err == nil {
-		var ps psResponse
-		data, _ := io.ReadAll(resp.Body)
+		data, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if jsonErr := json.Unmarshal(data, &ps); jsonErr == nil {
-			loadedModelsGauge.Set(float64(len(ps.Models)))
-			loadedModelInfo.Reset()
-			for _, m := range ps.Models {
-				loadedModelInfo.WithLabelValues(ensureModelTag(m.Name)).Set(1)
+		if err != nil {
+			log.Printf("ERROR reading /api/ps response: %v", err)
+		} else {
+			var ps psResponse
+			if jsonErr := json.Unmarshal(data, &ps); jsonErr == nil {
+				loadedModelsGauge.Set(float64(len(ps.Models)))
+				loadedModelInfo.Reset()
+				for _, m := range ps.Models {
+					loadedModelInfo.WithLabelValues(ensureModelTag(m.Name)).Set(1)
+				}
 			}
 		}
 	}
@@ -173,26 +177,30 @@ func main() {
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		// Refresh model information from /api/ps before serving metrics
 		if resp, err := upstreamClient.Get(upstreamAddr + "/api/ps"); err == nil {
-			var ps psResponse
-			data, _ := io.ReadAll(resp.Body)
+			data, err := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			if jsonErr := json.Unmarshal(data, &ps); jsonErr == nil {
-				loadedModelsGauge.Set(float64(len(ps.Models)))
-				loadedModelInfo.Reset()
-				modelRAMUsage.Reset() // Reset RAM usage before updating
-				
-				// Update model metrics directly from ps response
-				for _, m := range ps.Models {
-					modelName := ensureModelTag(m.Name)
-					loadedModelInfo.WithLabelValues(modelName).Set(1)
-					
-					// Convert size from bytes to megabytes
-					ramMB := float64(m.Size) / (1024 * 1024)
-					modelRAMUsage.WithLabelValues(modelName).Set(ramMB)
-				}
-				log.Printf("Refreshed metrics data: %d models loaded", len(ps.Models))
+			if err != nil {
+				log.Printf("ERROR reading /api/ps response: %v", err)
 			} else {
-				log.Printf("ERROR parsing /api/ps response during metrics refresh: %v", jsonErr)
+				var ps psResponse
+				if jsonErr := json.Unmarshal(data, &ps); jsonErr == nil {
+					loadedModelsGauge.Set(float64(len(ps.Models)))
+					loadedModelInfo.Reset()
+					modelRAMUsage.Reset() // Reset RAM usage before updating
+					
+					// Update model metrics directly from ps response
+					for _, m := range ps.Models {
+						modelName := ensureModelTag(m.Name)
+						loadedModelInfo.WithLabelValues(modelName).Set(1)
+						
+						// Convert size from bytes to megabytes
+						ramMB := float64(m.Size) / (1024 * 1024)
+						modelRAMUsage.WithLabelValues(modelName).Set(ramMB)
+					}
+					log.Printf("Refreshed metrics data: %d models loaded", len(ps.Models))
+				} else {
+					log.Printf("ERROR parsing /api/ps response during metrics refresh: %v", jsonErr)
+				}
 			}
 		} else {
 			log.Printf("ERROR refreshing model metrics: %v", err)
@@ -214,8 +222,14 @@ func main() {
 		// Read request body (if any) for forwarding and possibly to inspect model parameter
 		var bodyBytes []byte
 		if r.Body != nil {
-			bodyBytes, _ = io.ReadAll(r.Body)
+			var err error
+			bodyBytes, err = io.ReadAll(r.Body)
 			r.Body.Close()
+			if err != nil {
+				http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+				log.Printf("ERROR reading request body: %v", err)
+				return
+			}
 		}
 
 		// Build upstream request
@@ -342,32 +356,40 @@ func main() {
 			}
 		} else if r.URL.Path == "/api/ps" {
 			// Intercept /api/ps to update loaded models metrics
-			bodyData, _ := io.ReadAll(respUp.Body)
-			w.Write(bodyData) // write response to client
-			var ps psResponse
-			if err := json.Unmarshal(bodyData, &ps); err == nil {
-				loadedModelsGauge.Set(float64(len(ps.Models)))
-				loadedModelInfo.Reset()
-				modelRAMUsage.Reset() // Reset RAM usage before updating
-				
-				// Update model metrics directly from ps response
-				for _, m := range ps.Models {
-					modelName := ensureModelTag(m.Name)
-					loadedModelInfo.WithLabelValues(modelName).Set(1)
-					
-						// Convert size from bytes to megabytes
-					ramMB := float64(m.Size) / (1024 * 1024)
-					modelRAMUsage.WithLabelValues(modelName).Set(ramMB)
-					log.Printf("Model %s RAM usage: %.2f MB", modelName, ramMB)
-				}
+			bodyData, err := io.ReadAll(respUp.Body)
+			if err != nil {
+				log.Printf("ERROR reading /api/ps response body: %v", err)
 			} else {
-				log.Printf("ERROR parsing /api/ps response: %v", err)
+				if _, err := w.Write(bodyData); err != nil {
+					log.Printf("ERROR writing /api/ps response to client: %v", err)
+					return
+				}
+				var ps psResponse
+				if err := json.Unmarshal(bodyData, &ps); err == nil {
+					loadedModelsGauge.Set(float64(len(ps.Models)))
+					loadedModelInfo.Reset()
+					modelRAMUsage.Reset() // Reset RAM usage before updating
+					
+					// Update model metrics directly from ps response
+					for _, m := range ps.Models {
+						modelName := ensureModelTag(m.Name)
+						loadedModelInfo.WithLabelValues(modelName).Set(1)
+						
+						// Convert size from bytes to megabytes
+						ramMB := float64(m.Size) / (1024 * 1024)
+						modelRAMUsage.WithLabelValues(modelName).Set(ramMB)
+						log.Printf("Model %s RAM usage: %.2f MB", modelName, ramMB)
+					}
+				} else {
+					log.Printf("ERROR parsing /api/ps response: %v", err)
+				}
 			}
-			// We can return here since request is fully handled
 			return
 		} else {
 			// Other endpoints (e.g. /api/tags, /api/pull) - just copy through
-			io.Copy(w, respUp.Body)
+			if _, err := io.Copy(w, respUp.Body); err != nil {
+				log.Printf("ERROR copying upstream response: %v", err)
+			}
 			// Try to get model name from request (if JSON body has "model")
 			if len(bodyBytes) > 0 {
 				var reqJson map[string]interface{}
