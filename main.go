@@ -117,15 +117,17 @@ type modelsResponse struct {
 	} `json:"models"`
 }
 
-var upstreamClient = &http.Client{
-	// No global timeout; model inference may take a long time
-	Timeout: 0,
-}
+var (
+	upstreamClient = &http.Client{
+		// No global timeout; model inference may take a long time
+		Timeout: 0,
+	}
+	doneReasonRe = regexp.MustCompile(`"done_reason":(\d+)`)
+)
 
 // fixDoneReason processes JSON data to handle the done_reason field that might be a number or string
 func fixDoneReason(data []byte) []byte {
-	re := regexp.MustCompile(`"done_reason":(\d+)`)
-	return re.ReplaceAll(data, []byte(`"done_reason":"$1"`))
+	return doneReasonRe.ReplaceAll(data, []byte(`"done_reason":"$1"`))
 }
 
 // ensureModelTag adds ":latest" to model names that don't have a tag
