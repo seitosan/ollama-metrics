@@ -129,9 +129,10 @@ func fixDoneReason(data []byte) []byte {
 }
 
 // ensureModelTag adds ":latest" to model names that don't have a tag
+// Returns "unknown" if modelName is empty to prevent empty label values.
 func ensureModelTag(modelName string) string {
 	if modelName == "" {
-		return modelName
+		return "unknown"
 	}
 	if !strings.Contains(modelName, ":") {
 		return modelName + ":latest"
