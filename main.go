@@ -250,10 +250,12 @@ func main() {
 		}
 		defer respUp.Body.Close()
 
-		// Forward status code and headers (except hop-by-hop headers)
+		// Forward status code and headers (except hop-by-hop headers per RFC 7230 §6.1)
 		for name, vals := range respUp.Header {
 			switch strings.ToLower(name) {
-			case "transfer-encoding", "content-length":
+			case "transfer-encoding", "content-length", "connection",
+				"keep-alive", "upgrade", "trailer", "proxy-connection",
+				"proxy-authenticate", "proxy-authorization", "te":
 				continue
 			}
 			for _, v := range vals {
