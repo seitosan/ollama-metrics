@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -145,6 +146,23 @@ func main() {
 	if upstreamAddr == "" {
 		upstreamAddr = "http://localhost:11434"
 	}
+	u, err := url.Parse(upstreamAddr)
+	if err != nil {
+		log.Fatalf("Invalid OLLAMA_HOST %q: %v", upstreamAddr, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		log.Fatalf("Invalid OLLAMA_HOST scheme %q: must be http or https", u.Scheme)
+	}
+	if u.Host == "" {
+		log.Fatalf("Invalid OLLAMA_HOST %q: no host specified", upstreamAddr)
+	}
+	if u.User != nil {
+		log.Fatalf("Invalid OLLAMA_HOST %q: embedded credentials are not supported", upstreamAddr)
+	}
+	if u.Path != "" && u.Path != "/" {
+		log.Printf("Warning: ignoring path %q in OLLAMA_HOST", u.Path)
+	}
+	upstreamAddr = u.Scheme + "://" + u.Host
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
