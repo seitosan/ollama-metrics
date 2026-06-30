@@ -380,8 +380,8 @@ func main() {
 			// No token metrics for non-generate endpoints
 		}
 
-		// Update Prometheus metrics if applicable
-		if modelName != "" {
+		// Update Prometheus metrics if applicable (only for successful responses)
+		if modelName != "" && respUp.StatusCode >= 200 && respUp.StatusCode < 300 {
 			if promptCount > 0 {
 				promptTokens.WithLabelValues(modelName).Add(float64(promptCount))
 			}
