@@ -122,6 +122,38 @@ var upstreamClient = &http.Client{
 	Timeout: 0,
 }
 
+// refreshModelMetrics fetches /api/ps from Ollama and updates loaded model metrics
+func refreshModelMetrics(addr string) {
+	resp, err := upstreamClient.Get(addr + "/api/ps")
+	if err != nil {
+		log.Printf("ERROR refreshing model metrics: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var ps psResponse
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("ERROR reading /api/ps response: %v", err)
+		return
+	}
+	if err := json.Unmarshal(data, &ps); err != nil {
+		log.Printf("ERROR parsing /api/ps response: %v", err)
+		return
+	}
+
+	loadedModelsGauge.Set(float64(len(ps.Models)))
+	loadedModelInfo.Reset()
+	modelRAMUsage.Reset()
+
+	for _, m := range ps.Models {
+		modelName := ensureModelTag(m.Name)
+		loadedModelInfo.WithLabelValues(modelName).Set(1)
+		ramMB := float64(m.Size) / (1024 * 1024)
+		modelRAMUsage.WithLabelValues(modelName).Set(ramMB)
+	}
+}
+
 // fixDoneReason processes JSON data to handle the done_reason field that might be a number or string
 func fixDoneReason(data []byte) []byte {
 	re := regexp.MustCompile(`"done_reason":(\d+)`)
@@ -152,19 +184,8 @@ func main() {
 
 	log.Printf("Starting Ollama proxy sidecar, forwarding to %s", upstreamAddr)
 
-	// Optionally, initialize the loaded models gauge at startup
-	if resp, err := upstreamClient.Get(upstreamAddr + "/api/ps"); err == nil {
-		var ps psResponse
-		data, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if jsonErr := json.Unmarshal(data, &ps); jsonErr == nil {
-			loadedModelsGauge.Set(float64(len(ps.Models)))
-			loadedModelInfo.Reset()
-			for _, m := range ps.Models {
-				loadedModelInfo.WithLabelValues(ensureModelTag(m.Name)).Set(1)
-			}
-		}
-	}
+	// Initialize model metrics at startup
+	refreshModelMetrics(upstreamAddr)
 
 	// Set up HTTP handlers
 	mux := http.NewServeMux()
@@ -172,31 +193,7 @@ func main() {
 	// Custom metrics handler that refreshes model data before serving metrics
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		// Refresh model information from /api/ps before serving metrics
-		if resp, err := upstreamClient.Get(upstreamAddr + "/api/ps"); err == nil {
-			var ps psResponse
-			data, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if jsonErr := json.Unmarshal(data, &ps); jsonErr == nil {
-				loadedModelsGauge.Set(float64(len(ps.Models)))
-				loadedModelInfo.Reset()
-				modelRAMUsage.Reset() // Reset RAM usage before updating
-				
-				// Update model metrics directly from ps response
-				for _, m := range ps.Models {
-					modelName := ensureModelTag(m.Name)
-					loadedModelInfo.WithLabelValues(modelName).Set(1)
-					
-					// Convert size from bytes to megabytes
-					ramMB := float64(m.Size) / (1024 * 1024)
-					modelRAMUsage.WithLabelValues(modelName).Set(ramMB)
-				}
-				log.Printf("Refreshed metrics data: %d models loaded", len(ps.Models))
-			} else {
-				log.Printf("ERROR parsing /api/ps response during metrics refresh: %v", jsonErr)
-			}
-		} else {
-			log.Printf("ERROR refreshing model metrics: %v", err)
-		}
+		refreshModelMetrics(upstreamAddr)
 		
 		// Serve metrics using the standard Prometheus handler
 		promhttp.Handler().ServeHTTP(w, r)
@@ -344,26 +341,7 @@ func main() {
 			// Intercept /api/ps to update loaded models metrics
 			bodyData, _ := io.ReadAll(respUp.Body)
 			w.Write(bodyData) // write response to client
-			var ps psResponse
-			if err := json.Unmarshal(bodyData, &ps); err == nil {
-				loadedModelsGauge.Set(float64(len(ps.Models)))
-				loadedModelInfo.Reset()
-				modelRAMUsage.Reset() // Reset RAM usage before updating
-				
-				// Update model metrics directly from ps response
-				for _, m := range ps.Models {
-					modelName := ensureModelTag(m.Name)
-					loadedModelInfo.WithLabelValues(modelName).Set(1)
-					
-						// Convert size from bytes to megabytes
-					ramMB := float64(m.Size) / (1024 * 1024)
-					modelRAMUsage.WithLabelValues(modelName).Set(ramMB)
-					log.Printf("Model %s RAM usage: %.2f MB", modelName, ramMB)
-				}
-			} else {
-				log.Printf("ERROR parsing /api/ps response: %v", err)
-			}
-			// We can return here since request is fully handled
+			refreshModelMetrics(upstreamAddr)
 			return
 		} else {
 			// Other endpoints (e.g. /api/tags, /api/pull) - just copy through
