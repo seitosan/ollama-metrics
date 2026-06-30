@@ -380,6 +380,7 @@ func main() {
 			// No token metrics for non-generate endpoints
 		}
 
+		durationSec := time.Since(start).Seconds()
 		// Update Prometheus metrics if applicable
 		if modelName != "" {
 			if promptCount > 0 {
@@ -388,7 +389,6 @@ func main() {
 			if generatedCount > 0 {
 				generatedTokens.WithLabelValues(modelName).Add(float64(generatedCount))
 			}
-			durationSec := time.Since(start).Seconds()
 			endpoint := strings.TrimPrefix(r.URL.Path, "/api/")
 			if endpoint == "" {
 				endpoint = r.URL.Path
@@ -404,12 +404,11 @@ func main() {
 		}
 
 		// Logging
-		duration := time.Since(start).Seconds()
 		if modelName != "" && (promptCount > 0 || generatedCount > 0) {
 			log.Printf("%s %s -> model=%s prompt_tokens=%d generated_tokens=%d duration=%.2fs",
-				r.Method, r.URL.Path, modelName, promptCount, generatedCount, duration)
+				r.Method, r.URL.Path, modelName, promptCount, generatedCount, durationSec)
 		} else {
-			log.Printf("%s %s -> status=%d duration=%.2fs", r.Method, r.URL.Path, respUp.StatusCode, duration)
+			log.Printf("%s %s -> status=%d duration=%.2fs", r.Method, r.URL.Path, respUp.StatusCode, durationSec)
 		}
 	})
 
